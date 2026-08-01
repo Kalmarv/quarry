@@ -1,0 +1,88 @@
+:root {
+  --bg: #101214;
+  --surface: #1a1d21;
+  --surface2: #22262b;
+  --text: #e8e6e1;
+  --muted: #8a9199;
+  --accent: #d97e4a;
+  --green: #5cb176;
+  --red: #d96a6a;
+  --yellow: #d9b44a;
+  --blue: #6a9bd9;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 ui-sans-serif, system-ui, sans-serif;
+}
+.app { max-width: 880px; margin: 0 auto; padding: 1rem; }
+header { display: flex; align-items: center; gap: 1rem; padding: 0.5rem 0 1rem; }
+h1 { font-size: 1.2rem; margin: 0; letter-spacing: 0.02em; }
+nav { display: flex; gap: 0.25rem; flex: 1; }
+.tab {
+  background: none; border: none; color: var(--muted); padding: 0.4rem 0.8rem;
+  border-radius: 6px; cursor: pointer; font: inherit; text-transform: capitalize;
+}
+.tab.active { background: var(--surface2); color: var(--text); }
+.pill {
+  background: var(--accent); color: #fff; border-radius: 999px;
+  padding: 0 0.4rem; margin-left: 0.4rem; font-size: 0.75rem;
+}
+button {
+  background: var(--surface2); color: var(--text); border: 1px solid #333a42;
+  padding: 0.4rem 0.9rem; border-radius: 6px; cursor: pointer; font: inherit;
+}
+button:hover { border-color: var(--accent); }
+button.danger:hover { border-color: var(--red); color: var(--red); }
+button.ghost { background: none; border-color: transparent; color: var(--muted); }
+.card {
+  background: var(--surface); border: 1px solid #2a2f35; border-radius: 10px;
+  padding: 0.9rem 1rem; margin-bottom: 0.75rem;
+}
+.card-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+.clickable { cursor: pointer; }
+.muted { color: var(--muted); font-size: 0.85rem; }
+.empty { text-align: center; padding: 2rem; }
+.progress-wrap { display: flex; align-items: center; gap: 0.6rem; min-width: 200px; justify-content: flex-end; }
+.bar { width: 90px; height: 6px; background: var(--surface2); border-radius: 3px; overflow: hidden; }
+.bar-fill { height: 100%; background: var(--green); transition: width 0.5s; }
+.badge {
+  font-size: 0.7rem; padding: 0.1rem 0.45rem; border-radius: 4px;
+  text-transform: uppercase; letter-spacing: 0.05em; background: var(--surface2); color: var(--muted);
+}
+.badge-active, .badge-downloading { color: var(--blue); }
+.badge-completed, .badge-done, .badge-imported { color: var(--green); }
+.badge-failed { color: var(--red); }
+.badge-pending, .badge-added { color: var(--yellow); }
+.detail { margin-top: 0.8rem; border-top: 1px solid #2a2f35; padding-top: 0.8rem; }
+.section { margin-bottom: 0.8rem; }
+.section h4 { margin: 0 0 0.4rem; font-size: 0.8rem; text-transform: uppercase; color: var(--muted); letter-spacing: 0.06em; }
+.row { display: flex; gap: 0.6rem; align-items: baseline; padding: 0.15rem 0; }
+.row .grow { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ts { flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.ev-error { color: var(--red); }
+.ev-warn { color: var(--yellow); }
+.items-grid { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.item {
+  font-size: 0.75rem; padding: 0.15rem 0.45rem; border-radius: 4px;
+  background: var(--surface2); color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.item-done { background: #1e3327; color: var(--green); }
+.item-downloading, .item-importing { background: #1e2a38; color: var(--blue); }
+.item-failed { background: #38211e; color: var(--red); }
+.item-wanted { background: #35301c; color: var(--yellow); }
+.selections { margin: 0.5rem 0; padding-left: 1.2rem; }
+.selections li { margin-bottom: 0.25rem; }
+.selections code, .row code { font-size: 0.8rem; color: var(--text); }
+.reasoning { color: var(--muted); font-style: italic; margin: 0.5rem 0; }
+.actions { display: flex; gap: 0.5rem; margin-top: 0.6rem; align-items: center; }
+.actions input { flex: 1; }
+input, textarea {
+  background: var(--bg); color: var(--text); border: 1px solid #333a42;
+  border-radius: 6px; padding: 0.4rem 0.6rem; font: inherit;
+}
+.setting { display: flex; flex-direction: column; gap: 0.25rem; margin-bottom: 0.7rem; }
+.setting span { font-size: 0.8rem; color: var(--muted); }
+.toggle { display: flex; gap: 0.4rem; align-items: center; color: var(--muted); margin-bottom: 0.6rem; }
