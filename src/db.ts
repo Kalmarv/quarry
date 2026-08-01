@@ -171,6 +171,10 @@ function migrate(d: Database) {
   );
   CREATE INDEX IF NOT EXISTS idx_items_status ON items(status);
   CREATE INDEX IF NOT EXISTS idx_events_ts ON events(id DESC);
+  -- Movies use -1 sentinels: NULL != NULL in SQLite unique indexes, so NULL
+  -- season/episode would let movie items duplicate. Normalize legacy rows.
+  UPDATE items SET season = -1 WHERE season IS NULL;
+  UPDATE items SET episode = -1 WHERE episode IS NULL;
   `);
   seedSettings(d);
 }

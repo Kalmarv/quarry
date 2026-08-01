@@ -81,7 +81,7 @@ const api = {
 
 const gb = (n: number) => (n / 1024 ** 3).toFixed(1) + "GB";
 const se = (i: Item) =>
-  i.season == null
+  i.season == null || i.season < 0
     ? "Movie"
     : `S${String(i.season).padStart(2, "0")}E${String(i.episode).padStart(2, "0")}`;
 

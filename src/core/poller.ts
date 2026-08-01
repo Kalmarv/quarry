@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { db, logEvent, touchItem, type ItemRow, type RequestRow } from "../db";
 import * as seerr from "../clients/seerr";
-import { snapshot, type LibrarySnapshot } from "../clients/jellyfin";
+import { snapshot } from "../clients/jellyfin";
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
@@ -30,8 +30,10 @@ function upsertItem(opts: {
       opts.requestId,
       opts.mediaType,
       opts.tmdbId,
-      opts.season,
-      opts.episode,
+      // -1 sentinels for movies: SQLite unique indexes treat NULL != NULL,
+      // so NULL season/episode would let movie items duplicate.
+      opts.season ?? -1,
+      opts.episode ?? -1,
       opts.title,
       opts.airDate,
       status,
@@ -76,7 +78,9 @@ async function adoptExistingItems(req: RequestRow, seasons: number[]): Promise<n
   const rows =
     req.media_type === "movie"
       ? (d
-          .prepare("SELECT * FROM items WHERE tmdb_id = ? AND season IS NULL AND request_id != ?")
+          .prepare(
+            "SELECT * FROM items WHERE tmdb_id = ? AND (season IS NULL OR season = -1) AND request_id != ?",
+          )
           .all(req.tmdb_id, req.id) as ItemRow[])
       : seasons.length
         ? (d
@@ -86,28 +90,23 @@ async function adoptExistingItems(req: RequestRow, seasons: number[]): Promise<n
             .all(req.tmdb_id, ...seasons, req.id) as ItemRow[])
         : [];
   let recovered = 0;
-  let fresh: LibrarySnapshot | null = null;
   for (const it of rows) {
     d.prepare("UPDATE items SET request_id = ?, updated_at = datetime('now') WHERE id = ?").run(
       req.id,
       it.id,
     );
     if (it.status === "done") {
-      let present: boolean;
-      if (it.file_path) {
-        present = existsSync(it.file_path);
-      } else {
-        fresh ??= await snapshot(true);
-        present =
-          it.media_type === "movie"
-            ? fresh.movies.has(it.tmdb_id)
-            : fresh.episodes.has(`${it.tmdb_id}:${it.season}:${it.episode}`);
-      }
+      // Disk is authoritative when quarry imported the file itself. When it
+      // didn't (pre-v2 content, file_path null), Jellyfin's index lags real
+      // deletions — so trust the re-request itself: Seerr only allows
+      // re-requesting media its own sync considers missing, and if the file
+      // does still exist the import is idempotent and will no-op.
+      const present = it.file_path ? existsSync(it.file_path) : false;
       if (!present) {
         touchItem(it.id, { status: "wanted", file_path: null, failure: null, attempts: 0 });
         recovered++;
         logEvent({
-          message: "Previously fulfilled but no longer on disk — re-acquiring",
+          message: "Previously fulfilled but not verifiable on disk — re-acquiring",
           requestId: req.id,
           itemId: it.id,
         });
