@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db, getSetting, logEvent, type ItemRow, type RequestRow } from "../db";
 import { modelFor, logDecision } from "../llm";
 import * as prowlarr from "../clients/prowlarr";
+import { executePlan } from "./grab";
 
 export type PlanSelection = {
   guid: string;
@@ -202,6 +203,11 @@ export async function runSelections() {
       .prepare("SELECT * FROM items WHERE request_id = ? AND status = 'wanted' ORDER BY season, episode")
       .all(req.id) as ItemRow[];
     if (wanted.length === 0) continue;
-    await selectForRequest(req, wanted);
+    const planId = await selectForRequest(req, wanted);
+    if (planId && getSetting("approval_mode") === "auto") {
+      d.prepare("UPDATE plans SET status = 'approved' WHERE id = ?").run(planId);
+      logEvent({ message: `Plan #${planId} auto-approved`, requestId: req.id });
+      await executePlan(planId);
+    }
   }
 }

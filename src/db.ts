@@ -187,6 +187,7 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   effort_select: "high",
   model_map: "x-ai/grok-4.5",
   effort_map: "medium",
+  approval_mode: "auto",
   reselect_backoff_hours: "24",
   stall_hours: "12",
   max_item_attempts: "3",
