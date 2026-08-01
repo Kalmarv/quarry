@@ -1,0 +1,10 @@
+services:
+  quarry:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3004:3000"
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+      - /mnt/nyxus-vfs:/mnt/nyxus-vfs
