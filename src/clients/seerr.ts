@@ -31,11 +31,43 @@ export async function listApprovedRequests(): Promise<SeerrRequest[]> {
   return out;
 }
 
-export type MovieDetails = { title: string; releaseDate: string | null };
+export type MovieDetails = {
+  title: string;
+  releaseDate: string | null;
+  /**
+   * When the movie can be acquired at real quality: the earliest digital (4)
+   * or physical (5) release date anywhere. When TMDB has neither, theatrical
+   * + 90 days as a fallback. Null = theatrical-only and too recent — wait.
+   */
+  availableDate: string | null;
+};
+
+type ReleaseDates = {
+  results?: { release_dates: { type: number; release_date: string }[] }[];
+};
 
 export async function getMovie(tmdbId: number): Promise<MovieDetails> {
-  const m = await get<{ title: string; releaseDate?: string }>(`/movie/${tmdbId}`);
-  return { title: m.title, releaseDate: m.releaseDate ?? null };
+  const m = await get<{ title: string; releaseDate?: string; releases?: ReleaseDates }>(
+    `/movie/${tmdbId}`,
+  );
+  const releaseDate = m.releaseDate ?? null;
+
+  let digital: string | null = null;
+  for (const region of m.releases?.results ?? []) {
+    for (const rd of region.release_dates ?? []) {
+      if (rd.type === 4 || rd.type === 5) {
+        const d = rd.release_date.slice(0, 10);
+        if (!digital || d < digital) digital = d;
+      }
+    }
+  }
+  let availableDate = digital;
+  if (!availableDate && releaseDate) {
+    const t = new Date(releaseDate);
+    t.setDate(t.getDate() + 90);
+    availableDate = t.toISOString().slice(0, 10);
+  }
+  return { title: m.title, releaseDate, availableDate };
 }
 
 export type TvDetails = {

@@ -80,12 +80,12 @@ export async function pollSeerr() {
 
     let title: string;
     let year: number | null;
-    let releaseDate: string | null = null;
+    let availableDate: string | null = null;
     let seasons: number[] = [];
     if (mediaType === "movie") {
       const m = await seerr.getMovie(tmdbId);
       title = m.title;
-      releaseDate = m.releaseDate;
+      availableDate = m.availableDate;
       year = m.releaseDate ? Number(m.releaseDate.slice(0, 4)) : null;
     } else {
       const t = await seerr.getTv(tmdbId);
@@ -119,7 +119,7 @@ export async function pollSeerr() {
           season: null,
           episode: null,
           title,
-          airDate: releaseDate, // unreleased movies wait as 'unaired'
+          airDate: availableDate, // theatrical-only movies wait for digital/physical
           inLibrary: snap.movies.has(tmdbId),
         })
       )
@@ -145,6 +145,31 @@ export async function refreshAiring() {
     .all(today()) as { id: number }[];
   for (const f of flipped) {
     logEvent({ message: "Episode aired — now wanted", itemId: f.id });
+  }
+
+  // Movies waiting on a home release: re-check availability daily. TMDB often
+  // adds the digital date late, so this both moves air_date earlier when a
+  // digital date appears and corrects items that became wanted prematurely.
+  const movieReqs = d
+    .prepare(
+      `SELECT * FROM requests WHERE status = 'active' AND media_type = 'movie'
+       AND updated_at < datetime('now', '-1 day')
+       AND EXISTS (
+         SELECT 1 FROM items i WHERE i.request_id = requests.id AND i.status IN ('unaired', 'wanted')
+         AND NOT EXISTS (SELECT 1 FROM torrent_items ti WHERE ti.item_id = i.id)
+       )`,
+    )
+    .all() as RequestRow[];
+  for (const req of movieReqs) {
+    const m = await seerr.getMovie(req.tmdb_id);
+    const aired = !m.availableDate || m.availableDate <= today();
+    d.prepare(
+      `UPDATE items SET air_date = ?, status = ?, updated_at = datetime('now')
+       WHERE request_id = ? AND status IN ('unaired', 'wanted')
+       AND NOT EXISTS (SELECT 1 FROM torrent_items ti WHERE ti.item_id = items.id)
+       AND status != ?`,
+    ).run(m.availableDate, aired ? "wanted" : "unaired", req.id, aired ? "wanted" : "unaired");
+    d.prepare("UPDATE requests SET updated_at = datetime('now') WHERE id = ?").run(req.id);
   }
 
   // Airing shows get new episode rows as TMDB announces them.

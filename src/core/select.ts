@@ -22,6 +22,12 @@ export type PlanPayload = {
 
 const gb = (bytes: number) => (bytes / 1024 ** 3).toFixed(1);
 
+// Hard filter: theater recordings and pre-retail junk never reach the LLM.
+// The quality policy also forbids these, but this is the guarantee.
+const CAM_RE =
+  /\b(cam|camrip|hdcam|hqcam|ts|hdts|telesync|telecine|tc|hdtc|dcp|dcprip|scr|screener|dvdscr|dvdscreener|r5|workprint|wp)\b/i;
+export const isCamRip = (title: string) => CAM_RE.test(title.replace(/[._\-[\]()+]/g, " "));
+
 function itemLabel(i: ItemRow): string {
   if (i.media_type === "movie") return `#${i.id} movie`;
   return `#${i.id} S${String(i.season).padStart(2, "0")}E${String(i.episode).padStart(2, "0")}${i.title ? ` "${i.title}"` : ""}`;
@@ -51,7 +57,7 @@ export async function selectForRequest(req: RequestRow, wanted: ItemRow[]): Prom
     execute: async ({ query }: { query: string }) => {
       const results = await prowlarr.search(query, req.media_type);
       const fresh = results
-        .filter((r) => r.seeders > 0 && !seen.has(r.guid))
+        .filter((r) => r.seeders > 0 && !seen.has(r.guid) && !isCamRip(r.title))
         .sort((a, b) => b.seeders - a.seeders)
         .slice(0, 40);
       for (const r of fresh) {
