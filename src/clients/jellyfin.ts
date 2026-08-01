@@ -28,6 +28,19 @@ type JfItem = {
   IndexNumber?: number;
 };
 
+/**
+ * Ask Jellyfin to scan its libraries. Required after every import: Jellyfin's
+ * realtime monitoring is inotify-based, which never fires for files written
+ * through a different mount (quarry writes via virtiofs, Jellyfin reads CIFS).
+ */
+export async function refreshLibraries(): Promise<void> {
+  const { JELLYFIN_URL, JELLYFIN_API_KEY } = config();
+  const res = await fetch(`${JELLYFIN_URL}/Library/Refresh?api_key=${JELLYFIN_API_KEY}`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(`jellyfin refresh -> ${res.status}`);
+}
+
 let cache: LibrarySnapshot | null = null;
 const TTL_MS = 10 * 60 * 1000;
 

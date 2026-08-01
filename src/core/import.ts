@@ -7,7 +7,7 @@ import { config } from "../config";
 import { db, getSetting, logEvent, touchItem, type ItemRow, type RequestRow, type TorrentRow } from "../db";
 import { modelFor, logDecision } from "../llm";
 import * as qbit from "../clients/qbittorrent";
-import { snapshot } from "../clients/jellyfin";
+import { refreshLibraries, snapshot } from "../clients/jellyfin";
 import { destinationFor } from "./naming";
 import { failTorrent } from "./monitor";
 
@@ -245,11 +245,12 @@ async function importTorrent(t: TorrentRow) {
   });
 }
 
-/** Import every completed torrent. */
+/** Import every completed torrent, then tell Jellyfin to scan. */
 export async function importCompleted() {
   const completed = db()
     .prepare("SELECT * FROM torrents WHERE status = 'completed'")
     .all() as TorrentRow[];
+  let imported = 0;
   for (const t of completed) {
     // Mark items importing so a crash mid-import is visible, then do the work.
     db()
@@ -260,6 +261,7 @@ export async function importCompleted() {
       .run(t.hash);
     try {
       await importTorrent(t);
+      imported++;
     } catch (e) {
       logEvent({
         level: "error",
@@ -274,5 +276,11 @@ export async function importCompleted() {
         )
         .run(t.hash);
     }
+  }
+  if (imported > 0) {
+    await refreshLibraries().catch((e) =>
+      logEvent({ level: "warn", message: `Jellyfin refresh failed: ${e.message}` }),
+    );
+    logEvent({ message: "Triggered Jellyfin library scan" });
   }
 }
