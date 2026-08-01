@@ -1,6 +1,7 @@
-import { db, logEvent, type RequestRow } from "../db";
+import { existsSync } from "node:fs";
+import { db, logEvent, touchItem, type ItemRow, type RequestRow } from "../db";
 import * as seerr from "../clients/seerr";
-import { snapshot } from "../clients/jellyfin";
+import { snapshot, type LibrarySnapshot } from "../clients/jellyfin";
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
@@ -61,6 +62,62 @@ async function createItemsForTv(req: RequestRow, seasons: number[]) {
     }
   }
   return created;
+}
+
+/**
+ * A re-request of media quarry already tracks: move the existing items onto
+ * the new request and re-verify 'done' ones — the file may have been deleted
+ * since (that is usually why someone re-requests). Items quarry imported are
+ * checked directly on disk; items that were only ever seen in Jellyfin are
+ * checked against a fresh snapshot.
+ */
+async function adoptExistingItems(req: RequestRow, seasons: number[]): Promise<number> {
+  const d = db();
+  const rows =
+    req.media_type === "movie"
+      ? (d
+          .prepare("SELECT * FROM items WHERE tmdb_id = ? AND season IS NULL AND request_id != ?")
+          .all(req.tmdb_id, req.id) as ItemRow[])
+      : seasons.length
+        ? (d
+            .prepare(
+              `SELECT * FROM items WHERE tmdb_id = ? AND season IN (${seasons.map(() => "?").join(",")}) AND request_id != ?`,
+            )
+            .all(req.tmdb_id, ...seasons, req.id) as ItemRow[])
+        : [];
+  let recovered = 0;
+  let fresh: LibrarySnapshot | null = null;
+  for (const it of rows) {
+    d.prepare("UPDATE items SET request_id = ?, updated_at = datetime('now') WHERE id = ?").run(
+      req.id,
+      it.id,
+    );
+    if (it.status === "done") {
+      let present: boolean;
+      if (it.file_path) {
+        present = existsSync(it.file_path);
+      } else {
+        fresh ??= await snapshot(true);
+        present =
+          it.media_type === "movie"
+            ? fresh.movies.has(it.tmdb_id)
+            : fresh.episodes.has(`${it.tmdb_id}:${it.season}:${it.episode}`);
+      }
+      if (!present) {
+        touchItem(it.id, { status: "wanted", file_path: null, failure: null, attempts: 0 });
+        recovered++;
+        logEvent({
+          message: "Previously fulfilled but no longer on disk — re-acquiring",
+          requestId: req.id,
+          itemId: it.id,
+        });
+      }
+    } else if (it.status === "failed") {
+      touchItem(it.id, { status: "wanted", attempts: 0, failure: null });
+      recovered++;
+    }
+  }
+  return recovered;
 }
 
 /** Pull approved Seerr requests and materialize requests + items. */
@@ -127,8 +184,9 @@ export async function pollSeerr() {
     } else {
       created = await createItemsForTv(req, seasons);
     }
+    const adopted = await adoptExistingItems(req, seasons);
     logEvent({
-      message: `New request: ${title}${year ? ` (${year})` : ""} — ${created} item(s) to acquire`,
+      message: `New request: ${title}${year ? ` (${year})` : ""} — ${created + adopted} item(s) to acquire`,
       requestId: req.id,
       data: { seerrRequestId: sr.id, seasons },
     });
