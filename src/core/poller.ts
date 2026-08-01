@@ -80,10 +80,12 @@ export async function pollSeerr() {
 
     let title: string;
     let year: number | null;
+    let releaseDate: string | null = null;
     let seasons: number[] = [];
     if (mediaType === "movie") {
       const m = await seerr.getMovie(tmdbId);
       title = m.title;
+      releaseDate = m.releaseDate;
       year = m.releaseDate ? Number(m.releaseDate.slice(0, 4)) : null;
     } else {
       const t = await seerr.getTv(tmdbId);
@@ -117,7 +119,7 @@ export async function pollSeerr() {
           season: null,
           episode: null,
           title,
-          airDate: null,
+          airDate: releaseDate, // unreleased movies wait as 'unaired'
           inLibrary: snap.movies.has(tmdbId),
         })
       )
