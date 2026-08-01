@@ -1,7 +1,10 @@
 import { config } from "../config";
 
 const CATEGORY = "quarry";
-let sid: string | null = null;
+// Full "name=value" session cookie. qBittorrent 5.2 renamed it from "SID" to
+// a port-suffixed "QBT_SID_<port>" and returns 204 on login — never assume
+// the cookie name, echo back whatever was set.
+let cookie: string | null = null;
 
 async function login(): Promise<string> {
   const { QBIT_URL, QBIT_USERNAME, QBIT_PASSWORD } = config();
@@ -10,23 +13,24 @@ async function login(): Promise<string> {
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: `username=${encodeURIComponent(QBIT_USERNAME)}&password=${encodeURIComponent(QBIT_PASSWORD)}`,
   });
-  const cookie = res.headers.get("set-cookie");
-  const m = cookie ? /SID=([^;]+)/.exec(cookie) : null;
-  if (!res.ok || !m) throw new Error(`qbit login failed (${res.status})`);
-  sid = m[1] ?? null;
-  return sid!;
+  const pair = res.headers.get("set-cookie")?.split(";")[0]?.trim();
+  if (!res.ok || !pair || !pair.includes("=")) {
+    throw new Error(`qbit login failed (${res.status}, cookie: ${pair ?? "none"})`);
+  }
+  cookie = pair;
+  return cookie;
 }
 
 async function call(path: string, init?: RequestInit): Promise<Response> {
   const { QBIT_URL } = config();
-  if (!sid) await login();
+  if (!cookie) await login();
   const doFetch = () =>
     fetch(`${QBIT_URL}/api/v2${path}`, {
       ...init,
-      headers: { ...(init?.headers ?? {}), Cookie: `SID=${sid}` },
+      headers: { ...(init?.headers ?? {}), Cookie: cookie! },
     });
   let res = await doFetch();
-  if (res.status === 403) {
+  if (res.status === 403 || res.status === 401) {
     await login();
     res = await doFetch();
   }

@@ -36,13 +36,23 @@ export async function executePlan(planId: number) {
         continue;
       }
 
-      const exists = d.prepare("SELECT 1 FROM torrents WHERE hash = ?").get(hash);
-      if (!exists) {
+      const existing = d.prepare("SELECT status FROM torrents WHERE hash = ?").get(hash) as
+        | { status: string }
+        | null;
+      if (!existing) {
         d.prepare(
           "INSERT INTO torrents (hash, title, indexer, size, status, last_progress_at) VALUES (?, ?, ?, ?, 'added', datetime('now'))",
         ).run(hash, sel.title, sel.indexer, sel.size);
+      }
+      // Add (or re-add after a failed earlier attempt) whenever qBittorrent
+      // doesn't actually have it — the DB row alone is not proof of an add.
+      const live = !existing || existing.status === "added" || existing.status === "downloading";
+      if (live && (await qbit.getByHashes([hash])).length === 0) {
         if (resolved.kind === "magnet") await qbit.addTorrent({ magnet: resolved.magnet });
         else await qbit.addTorrent({ bytes: resolved.bytes });
+        d.prepare(
+          "UPDATE torrents SET status = 'added', failure = NULL, last_progress_at = datetime('now') WHERE hash = ?",
+        ).run(hash);
       }
 
       const linkStmt = d.prepare(
