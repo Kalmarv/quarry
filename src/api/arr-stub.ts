@@ -24,9 +24,35 @@ arrStub.get("/rootfolder", (c) => {
     { id: 2, path: cfg.LIBRARY_TV, freeSpace: 0 },
   ]);
 });
+// Seerr's add flow calls lookup first and REQUIRES a non-empty result
+// (an empty array throws "Error retrieving movie/series by ID" and the
+// request is marked FAILED). Return a minimal object WITHOUT an `id` field —
+// no id tells Seerr the title isn't in the library yet, so it proceeds to
+// POST, which we acknowledge. The poller remains the only real data path.
+const idFromTerm = (term: string | undefined) => Number(/(?:tmdb|tvdb):(\d+)/.exec(term ?? "")?.[1] ?? 0);
+
 arrStub.get("/movie", (c) => c.json([]));
-arrStub.get("/movie/lookup", (c) => c.json([]));
+arrStub.get("/movie/lookup", (c) => {
+  const tmdbId = idFromTerm(c.req.query("term"));
+  return c.json(tmdbId ? [{ title: `tmdb-${tmdbId}`, tmdbId, year: 0, isAvailable: true, monitored: false }] : []);
+});
+arrStub.get("/movie/:id", (c) =>
+  c.json({ id: Number(c.req.param("id")), monitored: true, hasFile: false }),
+);
 arrStub.get("/series", (c) => c.json([]));
-arrStub.get("/series/lookup", (c) => c.json([]));
-arrStub.post("/movie", async (c) => c.json({ id: Date.now(), ...(await c.req.json().catch(() => ({}))) }, 201));
-arrStub.post("/series", async (c) => c.json({ id: Date.now(), ...(await c.req.json().catch(() => ({}))) }, 201));
+arrStub.get("/series/lookup", (c) => {
+  const tvdbId = idFromTerm(c.req.query("term"));
+  const seasons = Array.from({ length: 51 }, (_, i) => ({ seasonNumber: i, monitored: false }));
+  return c.json(tvdbId ? [{ title: `tvdb-${tvdbId}`, tvdbId, year: 0, seasons, monitored: false }] : []);
+});
+arrStub.get("/series/:id", (c) =>
+  c.json({ id: Number(c.req.param("id")), monitored: true, seasons: [] }),
+);
+arrStub.post("/movie", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  return c.json({ ...body, id: Date.now() % 1_000_000, monitored: true, hasFile: false }, 201);
+});
+arrStub.post("/series", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  return c.json({ ...body, id: Date.now() % 1_000_000, monitored: true }, 201);
+});
