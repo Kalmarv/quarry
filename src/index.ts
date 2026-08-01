@@ -13,6 +13,8 @@ db();
 const app = new Hono();
 app.route("/api", api);
 app.route("/api/v3", arrStub);
+// v1 had a Seerr webhook; ack it so an old Seerr notification agent doesn't log failures.
+app.post("/webhook/seerr", (c) => c.json({ ok: true }));
 
 if (existsSync("ui/dist")) {
   app.use("/*", serveStatic({ root: "./ui/dist" }));
