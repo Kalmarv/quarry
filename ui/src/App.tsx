@@ -5,6 +5,7 @@ type Req = {
   title: string;
   year: number | null;
   media_type: string;
+  source: string;
   status: string;
   feedback: string | null;
   item_count: number;
@@ -159,7 +160,11 @@ function RequestRow_({ r, onDone }: { r: Req; onDone: () => void }) {
           <strong>
             {r.title} {r.year ? `(${r.year})` : ""}
           </strong>{" "}
-          <span className="muted">{r.media_type}</span> <Badge s={r.status} />
+          <span className="muted">
+            {r.media_type}
+            {r.source !== "seerr" ? ` · ${r.source}` : ""}
+          </span>{" "}
+          <Badge s={r.status} />
         </div>
         <div className="progress-wrap">
           <span className="muted">

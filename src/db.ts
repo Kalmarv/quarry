@@ -13,7 +13,8 @@ export type ItemStatus =
 
 export type RequestRow = {
   id: number;
-  seerr_request_id: number;
+  source: "seerr" | "letterboxd" | "manual";
+  source_key: string; // seerr request id / letterboxd film slug / tmdb id
   media_type: "movie" | "tv";
   tmdb_id: number;
   title: string;
@@ -81,11 +82,12 @@ export function testDb(): Database {
   return d;
 }
 
-function migrate(d: Database) {
+export function migrate(d: Database) {
   d.exec(`
   CREATE TABLE IF NOT EXISTS requests (
     id INTEGER PRIMARY KEY,
-    seerr_request_id INTEGER NOT NULL UNIQUE,
+    source TEXT NOT NULL DEFAULT 'seerr',
+    source_key TEXT NOT NULL,
     media_type TEXT NOT NULL,
     tmdb_id INTEGER NOT NULL,
     title TEXT NOT NULL,
@@ -95,7 +97,8 @@ function migrate(d: Database) {
     feedback TEXT,
     last_select_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(source, source_key)
   );
   CREATE TABLE IF NOT EXISTS items (
     id INTEGER PRIMARY KEY,
@@ -169,6 +172,14 @@ function migrate(d: Database) {
     reason TEXT,
     ts TEXT NOT NULL DEFAULT (datetime('now'))
   );
+  -- Letterboxd slug -> TMDB id cache, so trending films we skip (already in
+  -- library, wrong type) don't cost a film-page fetch every poll.
+  CREATE TABLE IF NOT EXISTS lb_films (
+    slug TEXT PRIMARY KEY,
+    tmdb_id INTEGER NOT NULL,
+    tmdb_type TEXT NOT NULL,
+    checked_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
   CREATE INDEX IF NOT EXISTS idx_items_status ON items(status);
   CREATE INDEX IF NOT EXISTS idx_events_ts ON events(id DESC);
   -- Movies use -1 sentinels: NULL != NULL in SQLite unique indexes, so NULL
@@ -176,6 +187,42 @@ function migrate(d: Database) {
   UPDATE items SET season = -1 WHERE season IS NULL;
   UPDATE items SET episode = -1 WHERE episode IS NULL;
   `);
+
+  // Pre-letterboxd databases keyed requests on seerr_request_id alone. SQLite
+  // can't alter constraints, so rebuild: every existing row becomes
+  // ('seerr', <seerr id>). Safe without FK juggling — foreign_keys is off and
+  // items/plans reference requests by name, which the renamed table takes over.
+  const legacy = (d.prepare("PRAGMA table_info(requests)").all() as { name: string }[]).some(
+    (c) => c.name === "seerr_request_id",
+  );
+  if (legacy) {
+    d.exec(`
+    CREATE TABLE requests_new (
+      id INTEGER PRIMARY KEY,
+      source TEXT NOT NULL DEFAULT 'seerr',
+      source_key TEXT NOT NULL,
+      media_type TEXT NOT NULL,
+      tmdb_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      year INTEGER,
+      requested_seasons TEXT NOT NULL DEFAULT '[]',
+      status TEXT NOT NULL DEFAULT 'active',
+      feedback TEXT,
+      last_select_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(source, source_key)
+    );
+    INSERT INTO requests_new (id, source, source_key, media_type, tmdb_id, title, year,
+      requested_seasons, status, feedback, last_select_at, created_at, updated_at)
+    SELECT id, 'seerr', CAST(seerr_request_id AS TEXT), media_type, tmdb_id, title, year,
+      requested_seasons, status, feedback, last_select_at, created_at, updated_at
+    FROM requests;
+    DROP TABLE requests;
+    ALTER TABLE requests_new RENAME TO requests;
+    `);
+  }
+
   seedSettings(d);
 }
 
@@ -195,6 +242,9 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   reselect_backoff_hours: "24",
   stall_hours: "12",
   max_item_attempts: "3",
+  letterboxd_enabled: "true",
+  letterboxd_min_rating: "3.9",
+  letterboxd_pages: "1",
 };
 
 function seedSettings(d: Database) {

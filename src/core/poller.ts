@@ -8,7 +8,7 @@ function today(): string {
 }
 
 /** Upsert one episode/movie item. Returns true if newly created. */
-function upsertItem(opts: {
+export function upsertItem(opts: {
   requestId: number;
   mediaType: "movie" | "tv";
   tmdbId: number;
@@ -124,13 +124,15 @@ export async function pollSeerr() {
   const approved = await seerr.listApprovedRequests();
   const d = db();
   const known = new Set(
-    (d.prepare("SELECT seerr_request_id FROM requests").all() as { seerr_request_id: number }[]).map(
-      (r) => r.seerr_request_id,
-    ),
+    (
+      d.prepare("SELECT source_key FROM requests WHERE source = 'seerr'").all() as {
+        source_key: string;
+      }[]
+    ).map((r) => r.source_key),
   );
 
   for (const sr of approved) {
-    if (known.has(sr.id)) continue;
+    if (known.has(String(sr.id))) continue;
     const tmdbId = sr.media.tmdbId;
     const mediaType = sr.media.mediaType;
 
@@ -154,15 +156,15 @@ export async function pollSeerr() {
 
     const res = d
       .prepare(
-        `INSERT INTO requests (seerr_request_id, media_type, tmdb_id, title, year, requested_seasons)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(seerr_request_id) DO NOTHING`,
+        `INSERT INTO requests (source, source_key, media_type, tmdb_id, title, year, requested_seasons)
+         VALUES ('seerr', ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(source, source_key) DO NOTHING`,
       )
-      .run(sr.id, mediaType, tmdbId, title, year, JSON.stringify(seasons));
+      .run(String(sr.id), mediaType, tmdbId, title, year, JSON.stringify(seasons));
     if (res.changes === 0) continue;
     const req = d
-      .prepare("SELECT * FROM requests WHERE seerr_request_id = ?")
-      .get(sr.id) as RequestRow;
+      .prepare("SELECT * FROM requests WHERE source = 'seerr' AND source_key = ?")
+      .get(String(sr.id)) as RequestRow;
 
     let created = 0;
     if (mediaType === "movie") {
