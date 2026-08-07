@@ -48,6 +48,9 @@ export async function selectForRequest(req: RequestRow, wanted: ItemRow[]): Prom
   // Candidates accumulate across searches; the LLM only ever sees indices.
   const candidates: prowlarr.Release[] = [];
   const seen = new Set<string>();
+  // Verbatim transcript of what each search returned to the LLM, for the
+  // decisions log — the searches ARE the selection logic.
+  const searches: { query: string; result: string }[] = [];
 
   const searchTool = tool({
     description:
@@ -65,11 +68,17 @@ export async function selectForRequest(req: RequestRow, wanted: ItemRow[]): Prom
         seen.add(r.guid);
         candidates.push(r);
       }
-      if (fresh.length === 0) return `No new results for "${query}".`;
-      const start = candidates.length - fresh.length;
-      return fresh
-        .map((r, i) => `[${start + i}] ${r.title} | ${gb(r.size)}GB | ${r.seeders} seeders | ${r.indexer}`)
-        .join("\n");
+      let out: string;
+      if (fresh.length === 0) {
+        out = `No new results for "${query}".`;
+      } else {
+        const start = candidates.length - fresh.length;
+        out = fresh
+          .map((r, i) => `[${start + i}] ${r.title} | ${gb(r.size)}GB | ${r.seeders} seeders | ${r.indexer}`)
+          .join("\n");
+      }
+      searches.push({ query, result: out });
+      return out;
     },
   });
 
@@ -148,7 +157,7 @@ export async function selectForRequest(req: RequestRow, wanted: ItemRow[]): Prom
     task: "select",
     model: modelId,
     input: { prompt, requestId: req.id },
-    output: submitted,
+    output: { plan: submitted, searches },
     error,
     durationMs: performance.now() - started,
   });

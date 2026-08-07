@@ -55,6 +55,16 @@ type Selection = {
   seeders: number;
   itemIds: number[];
 };
+type Decision = {
+  id: number;
+  ts: string;
+  task: string;
+  model: string;
+  error: string | null;
+  duration_ms: number;
+  cost_usd: number | null;
+};
+type DecisionDetail = Decision & { input: string; output: string | null };
 
 const j = (r: Response) => r.json();
 const api = {
@@ -63,6 +73,8 @@ const api = {
   pending: () => fetch("/api/plans/pending").then(j) as Promise<Plan[]>,
   events: () => fetch("/api/events?limit=200").then(j) as Promise<Ev[]>,
   settings: () => fetch("/api/settings").then(j) as Promise<Record<string, string>>,
+  decisions: () => fetch("/api/decisions").then(j) as Promise<Decision[]>,
+  decision: (id: number) => fetch(`/api/decisions/${id}`).then(j) as Promise<DecisionDetail>,
   approve: (id: number) => fetch(`/api/plans/${id}/approve`, { method: "POST" }),
   reject: (id: number, feedback: string) =>
     fetch(`/api/plans/${id}/reject`, {
@@ -232,6 +244,88 @@ function RequestRow_({ r, onDone }: { r: Req; onDone: () => void }) {
   );
 }
 
+function DecisionRow({ d }: { d: Decision }) {
+  const [open, setOpen] = useState(false);
+  const [detail, setDetail] = useState<DecisionDetail | null>(null);
+  useEffect(() => {
+    if (open && !detail) api.decision(d.id).then(setDetail);
+  }, [open, d.id, detail]);
+
+  // Old rows stored the bare plan as output; new ones store { plan, searches }.
+  // The search transcript stays in the DB for debugging but isn't rendered.
+  const parsed = useMemo(() => {
+    if (!detail) return null;
+    const input = JSON.parse(detail.input) as { requestId?: number };
+    const raw = detail.output ? (JSON.parse(detail.output) as Record<string, unknown>) : null;
+    const plan = (raw && "plan" in raw ? raw.plan : raw) as {
+      selections: Selection[];
+      reasoning: string;
+    } | null;
+    return { requestId: input.requestId, plan };
+  }, [detail]);
+
+  return (
+    <div className="card">
+      <div className="card-head clickable" onClick={() => setOpen(!open)}>
+        <div>
+          <strong>{d.task}</strong>{" "}
+          <span className="muted">
+            {d.model}
+            {parsed?.requestId ? ` · request #${parsed.requestId}` : ""}
+          </span>{" "}
+          {d.error && <Badge s="failed" />}
+        </div>
+        <span className="muted ts">
+          {(d.duration_ms / 1000).toFixed(1)}s
+          {d.cost_usd != null ? ` · $${d.cost_usd.toFixed(4)}` : ""} · {d.ts}
+        </span>
+      </div>
+      {open && parsed && (
+        <div className="detail">
+          {d.error && <p className="ev-error">{d.error}</p>}
+          {parsed.plan && (
+            <>
+              <ul className="selections">
+                {parsed.plan.selections.map((s, i) => (
+                  <li key={i}>
+                    <code>{s.title}</code>
+                    <span className="muted">
+                      {" "}
+                      — {gb(s.size)} · {s.seeders} seeders · {s.indexer} · covers{" "}
+                      {s.itemIds.length} item(s)
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <p className="reasoning">{parsed.plan.reasoning}</p>
+            </>
+          )}
+          {!parsed.plan && !d.error && (
+            <p className="muted">No plan submitted — nothing suitable found.</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Decisions() {
+  const [rows, setRows] = useState<Decision[]>([]);
+  useEffect(() => {
+    api.decisions().then(setRows);
+    const t = setInterval(() => api.decisions().then(setRows), 10000);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <>
+      {rows.map((d) => (
+        <DecisionRow key={d.id} d={d} />
+      ))}
+      {rows.length === 0 && <p className="muted empty">No LLM decisions logged yet.</p>}
+    </>
+  );
+}
+
 function Settings() {
   const [s, setS] = useState<Record<string, string> | null>(null);
   const [saved, setSaved] = useState(false);
@@ -267,7 +361,9 @@ function Settings() {
 }
 
 export function App() {
-  const [tab, setTab] = useState<"requests" | "approvals" | "activity" | "settings">("requests");
+  const [tab, setTab] = useState<"requests" | "approvals" | "activity" | "decisions" | "settings">(
+    "requests",
+  );
   const [requests, setRequests] = useState<Req[]>([]);
   const [pending, setPending] = useState<Plan[]>([]);
   const [events, setEvents] = useState<Ev[]>([]);
@@ -291,7 +387,7 @@ export function App() {
       <header>
         <h1>⛏️ Quarry</h1>
         <nav>
-          {(["requests", "approvals", "activity", "settings"] as const).map((t) => (
+          {(["requests", "approvals", "activity", "decisions", "settings"] as const).map((t) => (
             <button key={t} className={tab === t ? "tab active" : "tab"} onClick={() => setTab(t)}>
               {t}
               {t === "approvals" && pending.length > 0 && <span className="pill">{pending.length}</span>}
@@ -333,6 +429,11 @@ export function App() {
               </div>
             ))}
           </div>
+        </main>
+      )}
+      {tab === "decisions" && (
+        <main>
+          <Decisions />
         </main>
       )}
       {tab === "settings" && (
