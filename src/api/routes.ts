@@ -14,7 +14,9 @@ api.get("/requests", (c) => {
         (SELECT COUNT(*) FROM items i WHERE i.request_id = r.id) AS item_count,
         (SELECT COUNT(*) FROM items i WHERE i.request_id = r.id AND i.status = 'done') AS done_count,
         (SELECT COUNT(*) FROM items i WHERE i.request_id = r.id AND i.status = 'failed') AS failed_count,
-        (SELECT COUNT(*) FROM items i WHERE i.request_id = r.id AND i.status IN ('downloading','importing')) AS active_count
+        (SELECT COUNT(*) FROM items i WHERE i.request_id = r.id AND i.status IN ('downloading','importing')) AS active_count,
+        (SELECT COUNT(*) FROM items i WHERE i.request_id = r.id AND i.status = 'unaired') AS unaired_count,
+        (SELECT MIN(air_date) FROM items i WHERE i.request_id = r.id AND i.status = 'unaired') AS next_air_date
        FROM requests r ORDER BY r.id DESC`,
     )
     .all();

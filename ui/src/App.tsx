@@ -12,6 +12,8 @@ type Req = {
   done_count: number;
   failed_count: number;
   active_count: number;
+  unaired_count: number;
+  next_air_date: string | null;
   created_at: string;
 };
 type Item = {
@@ -183,6 +185,10 @@ function RequestRow_({ r, onDone }: { r: Req; onDone: () => void }) {
             {r.done_count}/{r.item_count}
             {r.failed_count > 0 ? ` · ${r.failed_count} failed` : ""}
             {r.active_count > 0 ? ` · ${r.active_count} active` : ""}
+            {r.unaired_count > 0 &&
+              (r.media_type === "movie"
+                ? ` · pending release${r.next_air_date ? ` ${r.next_air_date}` : ""}`
+                : ` · ${r.unaired_count} unaired${r.next_air_date ? `, next ${r.next_air_date}` : ""}`)}
           </span>
           <div className="bar">
             <div className="bar-fill" style={{ width: `${pct}%` }} />
@@ -230,7 +236,15 @@ function RequestRow_({ r, onDone }: { r: Req; onDone: () => void }) {
             <h4>Items</h4>
             <div className="items-grid">
               {detail.items.map((i) => (
-                <div key={i.id} className={`item item-${i.status}`} title={i.failure ?? i.file_path ?? ""}>
+                <div
+                  key={i.id}
+                  className={`item item-${i.status}`}
+                  title={
+                    i.status === "unaired" && i.air_date
+                      ? `releases ${i.air_date}`
+                      : (i.failure ?? i.file_path ?? "")
+                  }
+                >
                   {se(i)}
                 </div>
               ))}

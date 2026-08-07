@@ -73,6 +73,7 @@ button.ghost { background: none; border-color: transparent; color: var(--muted);
 .item-downloading, .item-importing { background: #1e2a38; color: var(--blue); }
 .item-failed { background: #38211e; color: var(--red); }
 .item-wanted { background: #35301c; color: var(--yellow); }
+.item-unaired { background: #2a2333; color: #a58fd9; }
 .selections { margin: 0.5rem 0; padding-left: 1.2rem; }
 .selections li { margin-bottom: 0.25rem; }
 .selections code, .row code { font-size: 0.8rem; color: var(--text); }
