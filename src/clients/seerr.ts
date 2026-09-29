@@ -14,15 +14,19 @@ export type SeerrRequest = {
   status: number; // 1 pending, 2 approved, 3 declined
   media: { tmdbId: number; mediaType: "movie" | "tv" };
   seasons: { seasonNumber: number }[];
+  requestedBy: { displayName: string } | null;
 };
 
-/** All approved requests, paginated. */
-export async function listApprovedRequests(): Promise<SeerrRequest[]> {
+/**
+ * Requests, paginated. 'approved' is what quarry acts on; note Seerr drops
+ * requests from it once their media is available, so history needs 'all'.
+ */
+export async function listRequests(filter: "approved" | "all"): Promise<SeerrRequest[]> {
   const out: SeerrRequest[] = [];
   let skip = 0;
   for (;;) {
     const page = await get<{ pageInfo: { pages: number; page: number }; results: SeerrRequest[] }>(
-      `/request?take=100&skip=${skip}&filter=approved`,
+      `/request?take=100&skip=${skip}&filter=${filter}`,
     );
     out.push(...page.results);
     if (page.pageInfo.page >= page.pageInfo.pages || page.results.length === 0) break;

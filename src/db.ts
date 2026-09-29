@@ -22,6 +22,7 @@ export type RequestRow = {
   requested_seasons: string; // JSON number[]
   status: "active" | "completed" | "failed" | "dismissed";
   feedback: string | null;
+  requested_by: string | null; // Seerr display name; null for automatic sources
   last_select_at: string | null;
   select_misses: number; // consecutive selection runs that found nothing
   next_select_at: string | null; // null = due now
@@ -98,6 +99,7 @@ export function migrate(d: Database) {
     requested_seasons TEXT NOT NULL DEFAULT '[]',
     status TEXT NOT NULL DEFAULT 'active',
     feedback TEXT,
+    requested_by TEXT,
     last_select_at TEXT,
     select_misses INTEGER NOT NULL DEFAULT 0,
     next_select_at TEXT,
@@ -231,6 +233,9 @@ export function migrate(d: Database) {
   }
 
   migrateSelectBackoff(d);
+  // Filled by pollSeerr, which backfills rows that predate the column.
+  if (!columns(d, "requests").includes("requested_by"))
+    d.exec("ALTER TABLE requests ADD COLUMN requested_by TEXT");
   seedSettings(d);
 }
 
@@ -241,9 +246,12 @@ export function migrate(d: Database) {
  * entering 'wanted' — aired, torrent failed, import missed, re-requested,
  * newly created — resets it. A trigger enforces that for every code path.
  */
+function columns(d: Database, table: string): string[] {
+  return (d.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
+}
+
 function migrateSelectBackoff(d: Database) {
-  const cols = (d.prepare("PRAGMA table_info(requests)").all() as { name: string }[]).map((c) => c.name);
-  if (!cols.includes("select_misses")) {
+  if (!columns(d, "requests").includes("select_misses")) {
     d.exec(`
     ALTER TABLE requests ADD COLUMN select_misses INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE requests ADD COLUMN next_select_at TEXT;

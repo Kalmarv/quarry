@@ -152,9 +152,33 @@ async function adoptExistingItems(req: RequestRow, seasons: number[]): Promise<n
   return recovered;
 }
 
+let requestersBackfilled = false;
+
+/**
+ * Fill requested_by on Seerr requests from before it was tracked. Once per
+ * process: requests deleted from Seerr stay unknown, and re-paging every
+ * tick for them would be waste.
+ */
+async function backfillRequesters() {
+  if (requestersBackfilled) return;
+  const d = db();
+  const missing = d
+    .prepare("SELECT COUNT(*) AS n FROM requests WHERE source = 'seerr' AND requested_by IS NULL")
+    .get() as { n: number };
+  if (missing.n > 0) {
+    const upd = d.prepare(
+      "UPDATE requests SET requested_by = ? WHERE source = 'seerr' AND source_key = ? AND requested_by IS NULL",
+    );
+    for (const sr of await seerr.listRequests("all"))
+      if (sr.requestedBy?.displayName) upd.run(sr.requestedBy.displayName, String(sr.id));
+  }
+  requestersBackfilled = true;
+}
+
 /** Pull approved Seerr requests and materialize requests + items. */
 export async function pollSeerr() {
-  const approved = await seerr.listApprovedRequests();
+  await backfillRequesters();
+  const approved = await seerr.listRequests("approved");
   const d = db();
   const known = new Set(
     (
@@ -166,6 +190,7 @@ export async function pollSeerr() {
 
   for (const sr of approved) {
     if (known.has(String(sr.id))) continue;
+    const requestedBy = sr.requestedBy?.displayName ?? null;
     const tmdbId = sr.media.tmdbId;
     const mediaType = sr.media.mediaType;
 
@@ -189,11 +214,11 @@ export async function pollSeerr() {
 
     const res = d
       .prepare(
-        `INSERT INTO requests (source, source_key, media_type, tmdb_id, title, year, requested_seasons)
-         VALUES ('seerr', ?, ?, ?, ?, ?, ?)
+        `INSERT INTO requests (source, source_key, media_type, tmdb_id, title, year, requested_seasons, requested_by)
+         VALUES ('seerr', ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(source, source_key) DO NOTHING`,
       )
-      .run(String(sr.id), mediaType, tmdbId, title, year, JSON.stringify(seasons));
+      .run(String(sr.id), mediaType, tmdbId, title, year, JSON.stringify(seasons), requestedBy);
     if (res.changes === 0) continue;
     const req = d
       .prepare("SELECT * FROM requests WHERE source = 'seerr' AND source_key = ?")
