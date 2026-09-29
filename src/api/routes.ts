@@ -54,6 +54,17 @@ api.delete("/requests/:id", (c) => {
   return c.json({ ok: true });
 });
 
+/** Skip the selection backoff: search on the next tick. */
+api.post("/requests/:id/search", (c) => {
+  const id = Number(c.req.param("id"));
+  const res = db()
+    .prepare("UPDATE requests SET select_misses = 0, next_select_at = NULL WHERE id = ? AND status = 'active'")
+    .run(id);
+  if (res.changes === 0) return c.json({ error: "no active request" }, 404);
+  tickSoon();
+  return c.json({ ok: true });
+});
+
 api.get("/plans/pending", (c) => {
   const rows = db()
     .prepare(
@@ -91,7 +102,8 @@ api.post("/plans/:id/reject", async (c) => {
   // Feedback rides on the request into the next selection run; clearing the
   // backoff makes that run happen on the next tick.
   d.prepare(
-    "UPDATE requests SET feedback = ?, last_select_at = NULL, updated_at = datetime('now') WHERE id = ?",
+    `UPDATE requests SET feedback = ?, select_misses = 0, next_select_at = NULL, updated_at = datetime('now')
+     WHERE id = ?`,
   ).run(body.feedback ?? null, plan.request_id);
   tickSoon();
   return c.json({ ok: true });

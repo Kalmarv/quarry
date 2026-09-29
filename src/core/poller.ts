@@ -7,7 +7,21 @@ function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-/** Upsert one episode/movie item. Returns true if newly created. */
+/**
+ * A missing date means different things per type: a movie with no home
+ * release date is typically an older film that's long been out, but an
+ * episode with no air date has been announced and not scheduled.
+ */
+function isAired(mediaType: "movie" | "tv", airDate: string | null): boolean {
+  return airDate ? airDate <= today() : mediaType === "movie";
+}
+
+/**
+ * Upsert one episode/movie item. Returns true if newly created. Existing items
+ * that haven't been acquired (unaired/wanted) track TMDB's latest title and
+ * air date, including moving back to unaired if the date slips; anything
+ * further along is left alone.
+ */
 export function upsertItem(opts: {
   requestId: number;
   mediaType: "movie" | "tv";
@@ -18,27 +32,46 @@ export function upsertItem(opts: {
   airDate: string | null;
   inLibrary: boolean;
 }): boolean {
-  const aired = !opts.airDate || opts.airDate <= today();
-  const status = opts.inLibrary ? "done" : aired ? "wanted" : "unaired";
-  const res = db()
-    .prepare(
-      `INSERT INTO items (request_id, media_type, tmdb_id, season, episode, title, air_date, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(tmdb_id, season, episode) DO NOTHING`,
-    )
-    .run(
-      opts.requestId,
-      opts.mediaType,
-      opts.tmdbId,
-      // -1 sentinels for movies: SQLite unique indexes treat NULL != NULL,
-      // so NULL season/episode would let movie items duplicate.
-      opts.season ?? -1,
-      opts.episode ?? -1,
-      opts.title,
-      opts.airDate,
-      status,
-    );
-  return res.changes > 0;
+  const d = db();
+  const aired = isAired(opts.mediaType, opts.airDate);
+  // -1 sentinels for movies: SQLite unique indexes treat NULL != NULL, so
+  // NULL season/episode would let movie items duplicate.
+  const season = opts.season ?? -1;
+  const episode = opts.episode ?? -1;
+
+  const existing = d
+    .prepare("SELECT id, status FROM items WHERE tmdb_id = ? AND season = ? AND episode = ?")
+    .get(opts.tmdbId, season, episode) as Pick<ItemRow, "id" | "status"> | null;
+  if (existing) {
+    // Library presence never demotes: re-requests deliberately re-want items
+    // Jellyfin still lists (see adoptExistingItems).
+    if (existing.status === "unaired" || existing.status === "wanted")
+      d.prepare(
+        `UPDATE items SET title = $title, air_date = $air, status = $status, updated_at = datetime('now')
+         WHERE id = $id AND (title IS NOT $title OR air_date IS NOT $air OR status != $status)`,
+      ).run({
+        $id: existing.id,
+        $title: opts.title,
+        $air: opts.airDate,
+        $status: aired ? "wanted" : "unaired",
+      });
+    return false;
+  }
+
+  d.prepare(
+    `INSERT INTO items (request_id, media_type, tmdb_id, season, episode, title, air_date, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    opts.requestId,
+    opts.mediaType,
+    opts.tmdbId,
+    season,
+    episode,
+    opts.title,
+    opts.airDate,
+    opts.inLibrary ? "done" : aired ? "wanted" : "unaired",
+  );
+  return true;
 }
 
 async function createItemsForTv(req: RequestRow, seasons: number[]) {
@@ -231,12 +264,17 @@ export async function refreshAiring() {
     d.prepare("UPDATE requests SET updated_at = datetime('now') WHERE id = ?").run(req.id);
   }
 
-  // Airing shows get new episode rows as TMDB announces them.
+  // Airing shows get new episode rows and air-date corrections as TMDB
+  // announces them. Undated wanted episodes predate the unaired-if-undated
+  // rule; refreshing them is what moves them back to unaired.
   const stale = d
     .prepare(
       `SELECT * FROM requests WHERE status = 'active' AND media_type = 'tv'
        AND updated_at < datetime('now', '-1 day')
-       AND EXISTS (SELECT 1 FROM items i WHERE i.request_id = requests.id AND i.status = 'unaired')`,
+       AND EXISTS (
+         SELECT 1 FROM items i WHERE i.request_id = requests.id
+         AND (i.status = 'unaired' OR (i.status = 'wanted' AND i.air_date IS NULL))
+       )`,
     )
     .all() as RequestRow[];
   for (const req of stale) {

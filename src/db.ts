@@ -22,6 +22,9 @@ export type RequestRow = {
   requested_seasons: string; // JSON number[]
   status: "active" | "completed" | "failed" | "dismissed";
   feedback: string | null;
+  last_select_at: string | null;
+  select_misses: number; // consecutive selection runs that found nothing
+  next_select_at: string | null; // null = due now
   created_at: string;
   updated_at: string;
 };
@@ -96,6 +99,8 @@ export function migrate(d: Database) {
     status TEXT NOT NULL DEFAULT 'active',
     feedback TEXT,
     last_select_at TEXT,
+    select_misses INTEGER NOT NULL DEFAULT 0,
+    next_select_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(source, source_key)
@@ -209,6 +214,8 @@ export function migrate(d: Database) {
       status TEXT NOT NULL DEFAULT 'active',
       feedback TEXT,
       last_select_at TEXT,
+      select_misses INTEGER NOT NULL DEFAULT 0,
+      next_select_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       UNIQUE(source, source_key)
@@ -223,7 +230,80 @@ export function migrate(d: Database) {
     `);
   }
 
+  migrateSelectBackoff(d);
   seedSettings(d);
+}
+
+/**
+ * Selection backoff: a request whose searches keep coming back empty is
+ * retried at exponentially growing intervals (see scheduleNextSelect). The
+ * backoff is only valid while the wanted set is unchanged, so any item
+ * entering 'wanted' — aired, torrent failed, import missed, re-requested,
+ * newly created — resets it. A trigger enforces that for every code path.
+ */
+function migrateSelectBackoff(d: Database) {
+  const cols = (d.prepare("PRAGMA table_info(requests)").all() as { name: string }[]).map((c) => c.name);
+  if (!cols.includes("select_misses")) {
+    d.exec(`
+    ALTER TABLE requests ADD COLUMN select_misses INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE requests ADD COLUMN next_select_at TEXT;
+    `);
+    backfillSelectMisses(d);
+  }
+  d.exec(`
+  CREATE TRIGGER IF NOT EXISTS items_wanted_insert AFTER INSERT ON items
+  WHEN NEW.status = 'wanted'
+  BEGIN
+    UPDATE requests SET select_misses = 0, next_select_at = NULL WHERE id = NEW.request_id;
+  END;
+  CREATE TRIGGER IF NOT EXISTS items_wanted_update AFTER UPDATE OF status, request_id ON items
+  WHEN NEW.status = 'wanted' AND (OLD.status != 'wanted' OR OLD.request_id != NEW.request_id)
+  BEGIN
+    UPDATE requests SET select_misses = 0, next_select_at = NULL WHERE id = NEW.request_id;
+  END;
+  `);
+}
+
+/** Seed misses from the decisions log so long-failing requests don't restart at the base interval. */
+function backfillSelectMisses(d: Database) {
+  const rows = d
+    .prepare(
+      `SELECT json_extract(input, '$.requestId') AS rid, output, error FROM decisions
+       WHERE task = 'select' ORDER BY id DESC`,
+    )
+    .all() as { rid: number | null; output: string | null; error: string | null }[];
+  const misses = new Map<number, number>();
+  const closed = new Set<number>(); // hit a successful plan: streak ends
+  for (const r of rows) {
+    if (r.rid == null || closed.has(r.rid) || r.error) continue;
+    const plan = r.output ? (JSON.parse(r.output).plan as { selections?: unknown[] } | null) : null;
+    if (plan?.selections?.length) closed.add(r.rid);
+    else misses.set(r.rid, (misses.get(r.rid) ?? 0) + 1);
+  }
+  const reqs = d
+    .prepare("SELECT id, last_select_at FROM requests WHERE status = 'active' AND last_select_at IS NOT NULL")
+    .all() as { id: number; last_select_at: string }[];
+  // Runs mid-migration, before getSetting()'s db() singleton is usable.
+  const stored = d.prepare("SELECT value FROM settings WHERE key = 'reselect_backoff_hours'").get() as
+    | { value: string }
+    | null;
+  const baseHours = Number(stored?.value ?? DEFAULT_SETTINGS.reselect_backoff_hours) || 24;
+  const maxDays = Number(DEFAULT_SETTINGS.reselect_max_days);
+  const upd = d.prepare("UPDATE requests SET select_misses = ?, next_select_at = ? WHERE id = ?");
+  for (const r of reqs) {
+    const n = misses.get(r.id) ?? 0;
+    if (n > 0) upd.run(n, nextSelectAt(r.last_select_at, n, baseHours, maxDays), r.id);
+  }
+}
+
+/**
+ * When to search again after `misses` consecutive empty runs: base, 2x, 4x...
+ * capped at maxDays. Returns an SQLite datetime string.
+ */
+export function nextSelectAt(from: string, misses: number, baseHours: number, maxDays: number): string {
+  const hours = Math.min(baseHours * 2 ** Math.max(0, misses - 1), maxDays * 24);
+  const t = new Date(from.replace(" ", "T") + "Z").getTime() + hours * 3600_000;
+  return new Date(t).toISOString().slice(0, 19).replace("T", " ");
 }
 
 export const DEFAULT_SETTINGS: Record<string, string> = {
@@ -240,6 +320,7 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   effort_map: "medium",
   approval_mode: "auto",
   reselect_backoff_hours: "24",
+  reselect_max_days: "30",
   stall_hours: "12",
   max_item_attempts: "3",
   letterboxd_enabled: "true",

@@ -18,9 +18,25 @@ export function modelFor(task: LlmTask) {
   return {
     model: provider().chat(model, {
       extraBody: { reasoning: { effort } },
+      usage: { include: true }, // per-response cost, see openRouterCost
     }),
     modelId: model,
   };
+}
+
+type StepMetadata = { providerMetadata?: Record<string, Record<string, unknown>> | undefined };
+
+/**
+ * Total USD cost reported by OpenRouter usage accounting. A tool loop is one
+ * billed response per step, so sum them all. Null when nothing reported one.
+ */
+export function openRouterCost(steps: StepMetadata[]): number | null {
+  let total: number | null = null;
+  for (const s of steps) {
+    const cost = (s.providerMetadata?.openrouter?.usage as { cost?: number } | undefined)?.cost;
+    if (typeof cost === "number") total = (total ?? 0) + cost;
+  }
+  return total;
 }
 
 export function logDecision(opts: {

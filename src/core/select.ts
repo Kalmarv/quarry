@@ -1,7 +1,7 @@
 import { generateText, hasToolCall, stepCountIs, tool } from "ai";
 import { z } from "zod";
-import { db, getSetting, logEvent, type ItemRow, type RequestRow } from "../db";
-import { modelFor, logDecision } from "../llm";
+import { db, getSetting, logEvent, nextSelectAt, type ItemRow, type RequestRow } from "../db";
+import { modelFor, logDecision, openRouterCost } from "../llm";
 import * as prowlarr from "../clients/prowlarr";
 import { executePlan } from "./grab";
 
@@ -34,10 +34,16 @@ function itemLabel(i: ItemRow): string {
   return `#${i.id} S${String(i.season).padStart(2, "0")}E${String(i.episode).padStart(2, "0")}${i.title ? ` "${i.title}"` : ""}`;
 }
 
-/** Run the selection agent for one request. Returns the created plan id, or null. */
-export async function selectForRequest(req: RequestRow, wanted: ItemRow[]): Promise<number | null> {
+/**
+ * plan: a plan was created. empty: the agent searched and found nothing —
+ * evidence the release doesn't exist yet, so it grows the backoff. error: the
+ * run itself broke, which says nothing about availability.
+ */
+export type SelectOutcome = { kind: "plan"; planId: number } | { kind: "empty" } | { kind: "error" };
+
+/** Run the selection agent for one request. */
+export async function selectForRequest(req: RequestRow, wanted: ItemRow[]): Promise<SelectOutcome> {
   const d = db();
-  d.prepare("UPDATE requests SET last_select_at = datetime('now') WHERE id = ?").run(req.id);
 
   const blocked = (
     d.prepare("SELECT title FROM blocklist WHERE title IS NOT NULL ORDER BY ts DESC LIMIT 40").all() as {
@@ -143,13 +149,15 @@ export async function selectForRequest(req: RequestRow, wanted: ItemRow[]): Prom
   const { model, modelId } = modelFor("select");
   const started = performance.now();
   let error: string | undefined;
+  let costUsd: number | null = null;
   try {
-    await generateText({
+    const result = await generateText({
       model,
       tools: { search: searchTool, submit_plan: submitTool },
       stopWhen: [stepCountIs(16), hasToolCall("submit_plan")],
       prompt,
     });
+    costUsd = openRouterCost(result.steps);
   } catch (e) {
     error = e instanceof Error ? e.message : String(e);
   }
@@ -160,10 +168,11 @@ export async function selectForRequest(req: RequestRow, wanted: ItemRow[]): Prom
     output: { plan: submitted, searches },
     error,
     durationMs: performance.now() - started,
+    costUsd,
   });
   if (error) {
     logEvent({ level: "error", message: `Selection failed: ${error}`, requestId: req.id });
-    return null;
+    return { kind: "error" };
   }
 
   const plan = submitted as PlanPayload | null;
@@ -173,7 +182,7 @@ export async function selectForRequest(req: RequestRow, wanted: ItemRow[]): Prom
       message: `Selection found nothing suitable${plan ? `: ${plan.reasoning}` : ""}`,
       requestId: req.id,
     });
-    return null;
+    return { kind: "empty" };
   }
 
   const res = d
@@ -185,13 +194,32 @@ export async function selectForRequest(req: RequestRow, wanted: ItemRow[]): Prom
     requestId: req.id,
     data: { selections: plan.selections.map((s) => ({ title: s.title, items: s.itemIds.length })) },
   });
-  return planId;
+  return { kind: "plan", planId };
+}
+
+/**
+ * Record a selection run and decide when the next one may happen. Only empty
+ * runs grow the backoff; a plan or an error retries at the base interval (a
+ * plan normally parks the request on a live torrent or pending approval
+ * anyway — the interval matters only if every grab in it failed). The
+ * items_wanted_* triggers reset all of this when the wanted set changes.
+ */
+function scheduleNextSelect(req: RequestRow, outcome: SelectOutcome) {
+  const baseHours = Number(getSetting("reselect_backoff_hours")) || 24;
+  const maxDays = Number(getSetting("reselect_max_days")) || 30;
+  const misses = outcome.kind === "empty" ? req.select_misses + 1 : outcome.kind === "plan" ? 0 : req.select_misses;
+  const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+  const next = nextSelectAt(now, outcome.kind === "empty" ? misses : 1, baseHours, maxDays);
+  db()
+    .prepare("UPDATE requests SET last_select_at = ?, select_misses = ?, next_select_at = ? WHERE id = ?")
+    .run(now, misses, next, req.id);
+  if (outcome.kind === "empty" && misses > 1)
+    logEvent({ message: `Nothing found ${misses} times in a row — next search ${next} UTC`, requestId: req.id });
 }
 
 /** Find requests due for selection and run the agent for each. */
 export async function runSelections() {
   const d = db();
-  const backoffHours = Number(getSetting("reselect_backoff_hours")) || 24;
   const due = d
     .prepare(
       `SELECT r.* FROM requests r
@@ -203,17 +231,19 @@ export async function runSelections() {
          JOIN items i ON i.id = ti.item_id
          WHERE i.request_id = r.id AND t.status IN ('added', 'downloading', 'completed')
        )
-       AND (r.last_select_at IS NULL OR r.last_select_at < datetime('now', ?))`,
+       AND (r.next_select_at IS NULL OR r.next_select_at <= datetime('now'))`,
     )
-    .all(`-${backoffHours} hours`) as RequestRow[];
+    .all() as RequestRow[];
 
   for (const req of due) {
     const wanted = d
       .prepare("SELECT * FROM items WHERE request_id = ? AND status = 'wanted' ORDER BY season, episode")
       .all(req.id) as ItemRow[];
     if (wanted.length === 0) continue;
-    const planId = await selectForRequest(req, wanted);
-    if (planId && getSetting("approval_mode") === "auto") {
+    const outcome = await selectForRequest(req, wanted);
+    scheduleNextSelect(req, outcome);
+    if (outcome.kind === "plan" && getSetting("approval_mode") === "auto") {
+      const { planId } = outcome;
       d.prepare("UPDATE plans SET status = 'approved' WHERE id = ?").run(planId);
       logEvent({ message: `Plan #${planId} auto-approved`, requestId: req.id });
       await executePlan(planId);

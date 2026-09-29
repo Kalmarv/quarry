@@ -5,7 +5,7 @@ import { copyFile, link, rename, rm, readdir } from "node:fs/promises";
 import { dirname, extname, join } from "node:path";
 import { config } from "../config";
 import { db, getSetting, logEvent, touchItem, type ItemRow, type RequestRow, type TorrentRow } from "../db";
-import { modelFor, logDecision } from "../llm";
+import { modelFor, logDecision, openRouterCost } from "../llm";
 import * as qbit from "../clients/qbittorrent";
 import { refreshLibraries, snapshot } from "../clients/jellyfin";
 import { destinationFor } from "./naming";
@@ -124,13 +124,14 @@ async function mapFilesToItems(
 
   const { model, modelId } = modelFor("map");
   const started = performance.now();
-  const { object } = await generateObject({ model, schema: mapSchema, prompt });
+  const { object, providerMetadata } = await generateObject({ model, schema: mapSchema, prompt });
   logDecision({
     task: "map",
     model: modelId,
     input: { prompt },
     output: object,
     durationMs: performance.now() - started,
+    costUsd: openRouterCost([{ providerMetadata }]),
   });
 
   const byIndex = new Map(files.map((f) => [f.index, f]));
