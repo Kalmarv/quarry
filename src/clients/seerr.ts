@@ -45,6 +45,9 @@ export type MovieDetails = {
   /** Earliest digital (4) / physical (5) release date in any region. */
   digitalDate: string | null;
   physicalDate: string | null;
+  posterPath: string | null;
+  backdropPath: string | null;
+  overview: string | null;
   /**
    * When the movie can be acquired at real quality: the earlier of
    * digitalDate/physicalDate. When TMDB has neither, theatrical + 90 days as
@@ -75,6 +78,9 @@ export async function getMovie(tmdbId: number): Promise<MovieDetails> {
     originalTitle?: string;
     releaseDate?: string;
     runtime?: number;
+    posterPath?: string;
+    backdropPath?: string;
+    overview?: string;
     releases?: ReleaseDates;
     credits?: { cast?: { name: string }[]; crew?: { name: string; job: string }[] };
   }>(`/movie/${tmdbId}`);
@@ -97,6 +103,9 @@ export async function getMovie(tmdbId: number): Promise<MovieDetails> {
     cast: (m.credits?.cast ?? []).slice(0, 3).map((c) => c.name),
     digitalDate,
     physicalDate,
+    posterPath: m.posterPath ?? null,
+    backdropPath: m.backdropPath ?? null,
+    overview: m.overview || null,
     availableDate,
   };
 }
@@ -107,6 +116,9 @@ export type TvDetails = {
   firstAirDate: string | null;
   createdBy: string[];
   networks: string[];
+  posterPath: string | null;
+  backdropPath: string | null;
+  overview: string | null;
   seasons: { seasonNumber: number; episodeCount: number }[];
 };
 
@@ -117,6 +129,9 @@ export async function getTv(tmdbId: number): Promise<TvDetails> {
     firstAirDate?: string;
     createdBy?: { name: string }[];
     networks?: { name: string }[];
+    posterPath?: string;
+    backdropPath?: string;
+    overview?: string;
     seasons: { seasonNumber: number; episodeCount: number }[];
   }>(`/tv/${tmdbId}`);
   return {
@@ -125,6 +140,9 @@ export async function getTv(tmdbId: number): Promise<TvDetails> {
     firstAirDate: t.firstAirDate ?? null,
     createdBy: (t.createdBy ?? []).map((c) => c.name),
     networks: (t.networks ?? []).map((n) => n.name),
+    posterPath: t.posterPath ?? null,
+    backdropPath: t.backdropPath ?? null,
+    overview: t.overview || null,
     seasons: t.seasons ?? [],
   };
 }

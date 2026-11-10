@@ -1,23 +1,21 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type Req } from "./api";
-import { Requests } from "./Requests";
+import { RequestList, RequestPane, defaultSelection } from "./Requests";
 import { Activity } from "./Activity";
 import { Settings } from "./Settings";
 
-const TABS = [
-  { key: "requests", label: "Requests" },
-  { key: "activity", label: "Activity" },
-  { key: "settings", label: "Settings" },
-] as const;
-type Tab = (typeof TABS)[number]["key"];
+/** #r/123 selects a request; #activity and #settings take over the right pane. */
+type View = { kind: "request"; id: number | null } | { kind: "activity" } | { kind: "settings" };
 
-const tabFromHash = (): Tab => {
+const viewFromHash = (): View => {
   const h = location.hash.slice(1);
-  return TABS.some((t) => t.key === h) ? (h as Tab) : "requests";
+  if (h === "activity" || h === "settings") return { kind: h };
+  const m = /^r\/(\d+)$/.exec(h);
+  return { kind: "request", id: m ? Number(m[1]) : null };
 };
 
 export function App() {
-  const [tab, setTab] = useState<Tab>(tabFromHash);
+  const [view, setView] = useState<View>(viewFromHash);
   const [requests, setRequests] = useState<Req[] | null>(null);
   const [syncing, setSyncing] = useState(false);
 
@@ -30,49 +28,57 @@ export function App() {
     return () => clearInterval(t);
   }, [refresh]);
   useEffect(() => {
-    const onHash = () => setTab(tabFromHash());
+    const onHash = () => setView(viewFromHash());
     addEventListener("hashchange", onHash);
     return () => removeEventListener("hashchange", onHash);
   }, []);
 
-  const needsYou = requests?.filter((r) => r.phase === "review" || r.phase === "failed").length ?? 0;
+  const selectedId =
+    view.kind === "request" ? (view.id ?? (requests ? defaultSelection(requests) : null)) : null;
+  const selected = requests?.find((r) => r.id === selectedId) ?? null;
 
   return (
     <div className="app">
-      <header className="masthead">
-        <h1 className="wordmark">Quarry</h1>
-        <nav>
-          {TABS.map((t) => (
-            <a key={t.key} href={`#${t.key}`} className="tab" aria-current={tab === t.key ? "page" : undefined}>
-              {t.label}
-              {t.key === "requests" && needsYou > 0 && (
-                <span className="tab-alert" aria-label={`${needsYou} need you`}>
-                  {needsYou}
-                </span>
-              )}
-            </a>
-          ))}
+      <aside className="side">
+        <header className="side-top">
+          <h1 className="wordmark">
+            <a href="#">Quarry</a>
+          </h1>
+          <button
+            className="btn"
+            disabled={syncing}
+            title="Poll Seerr, qBittorrent and Jellyfin now instead of waiting for the next 2-minute check"
+            onClick={async () => {
+              setSyncing(true);
+              await api.sync();
+              setTimeout(() => {
+                refresh();
+                setSyncing(false);
+              }, 1500);
+            }}
+          >
+            {syncing ? "Checking…" : "Check now"}
+          </button>
+        </header>
+        <nav className="side-nav">
+          <a href="#activity" aria-current={view.kind === "activity" ? "page" : undefined}>
+            Activity
+          </a>
+          <a href="#settings" aria-current={view.kind === "settings" ? "page" : undefined}>
+            Settings
+          </a>
         </nav>
-        <button
-          className="btn btn-quiet sync"
-          disabled={syncing}
-          title="Poll Seerr, qBittorrent and Jellyfin now instead of waiting for the next 2-minute check"
-          onClick={async () => {
-            setSyncing(true);
-            await api.sync();
-            setTimeout(() => {
-              refresh();
-              setSyncing(false);
-            }, 1500);
-          }}
-        >
-          {syncing ? "Checking…" : "Check now"}
-        </button>
-      </header>
+        {requests && <RequestList requests={requests} selectedId={selectedId} />}
+      </aside>
 
-      {tab === "requests" && requests && <Requests requests={requests} onChange={refresh} />}
-      {tab === "activity" && <Activity />}
-      {tab === "settings" && <Settings />}
+      <main className="pane">
+        {view.kind === "activity" && <Activity />}
+        {view.kind === "settings" && <Settings />}
+        {view.kind === "request" && selected && <RequestPane key={selected.id} r={selected} onChange={refresh} />}
+        {view.kind === "request" && requests && !selected && (
+          <p className="empty">No requests yet. Approve one in Seerr and it shows up here within two minutes.</p>
+        )}
+      </main>
     </div>
   );
 }

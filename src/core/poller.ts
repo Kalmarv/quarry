@@ -252,6 +252,21 @@ export async function pollSeerr() {
   }
 }
 
+const ARTWORK_PER_TICK = 40;
+
+/** Look up poster, backdrop and synopsis for requests that don't have them, a few per tick. */
+export async function fillArtwork() {
+  const d = db();
+  const rows = d
+    .prepare("SELECT id, media_type, tmdb_id FROM requests WHERE poster_path IS NULL ORDER BY id DESC LIMIT ?")
+    .all(ARTWORK_PER_TICK) as Pick<RequestRow, "id" | "media_type" | "tmdb_id">[];
+  const upd = d.prepare("UPDATE requests SET poster_path = ?, backdrop_path = ?, overview = ? WHERE id = ?");
+  for (const r of rows) {
+    const m = r.media_type === "movie" ? await seerr.getMovie(r.tmdb_id) : await seerr.getTv(r.tmdb_id);
+    upd.run(m.posterPath ?? "", m.backdropPath, m.overview, r.id);
+  }
+}
+
 /** Flip unaired items whose air date has passed; refresh episode lists of airing shows daily. */
 export async function refreshAiring() {
   const d = db();

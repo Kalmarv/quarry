@@ -26,6 +26,9 @@ export type RequestRow = {
   last_select_at: string | null;
   select_misses: number; // consecutive selection runs that found nothing
   next_select_at: string | null; // null = due now
+  poster_path: string | null; // TMDB image path; null = not looked up yet, '' = none
+  backdrop_path: string | null;
+  overview: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -236,6 +239,13 @@ export function migrate(d: Database) {
   // Filled by pollSeerr, which backfills rows that predate the column.
   if (!columns(d, "requests").includes("requested_by"))
     d.exec("ALTER TABLE requests ADD COLUMN requested_by TEXT");
+  // Filled by fillArtwork; '' = looked up, TMDB has none.
+  if (!columns(d, "requests").includes("poster_path"))
+    d.exec(`
+    ALTER TABLE requests ADD COLUMN poster_path TEXT;
+    ALTER TABLE requests ADD COLUMN backdrop_path TEXT;
+    ALTER TABLE requests ADD COLUMN overview TEXT;
+    `);
   seedSettings(d);
 }
 

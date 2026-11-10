@@ -1,5 +1,5 @@
 import { db, logEvent } from "../db";
-import { pollSeerr, refreshAiring } from "./poller";
+import { fillArtwork, pollSeerr, refreshAiring } from "./poller";
 import { pollLetterboxd } from "./letterboxd";
 import { monitorTorrents } from "./monitor";
 import { importCompleted } from "./import";
@@ -56,6 +56,7 @@ export async function tick() {
     await step("pollSeerr", pollSeerr);
     await step("pollLetterboxd", pollLetterboxd);
     await step("refreshAiring", refreshAiring);
+    await step("fillArtwork", fillArtwork);
     await step("monitorTorrents", monitorTorrents);
     await step("importCompleted", importCompleted);
     await step("runSelections", runSelections);

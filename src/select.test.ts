@@ -38,6 +38,9 @@ const odyssey = {
   cast: ["Matt Damon", "Tom Holland", "Anne Hathaway"],
   digitalDate: "2026-11-17",
   physicalDate: "2026-11-17",
+  posterPath: null,
+  backdropPath: null,
+  overview: null,
   availableDate: "2026-11-17",
 };
 
@@ -74,6 +77,9 @@ describe("title facts", () => {
         firstAirDate: "2024-02-27",
         createdBy: ["Rachel Kondo", "Justin Marks"],
         networks: ["FX"],
+        posterPath: null,
+        backdropPath: null,
+        overview: null,
         seasons: [],
       }),
     ).toEqual([

@@ -22,6 +22,9 @@ export type Req = {
   select_misses: number;
   last_select_at: string | null;
   next_select_at: string | null;
+  poster_path: string | null; // TMDB image path; '' = TMDB has none
+  backdrop_path: string | null;
+  overview: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -81,6 +84,10 @@ export type RequestDetail = {
   torrents: Torrent[];
   events: Ev[];
 };
+
+/** A TMDB image URL, or null when there's no artwork (yet). */
+export const tmdbImage = (path: string | null, width: "w92" | "w185" | "w342" | "w1280") =>
+  path ? `https://image.tmdb.org/t/p/${width}${path}` : null;
 
 export const parsePlan = (p: Plan) => JSON.parse(p.payload) as { selections: Selection[]; reasoning: string };
 
