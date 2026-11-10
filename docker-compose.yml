@@ -7,4 +7,4 @@ services:
     env_file: .env
     volumes:
       - ./data:/app/data
-      - /mnt/nyxus-vfs:/mnt/nyxus-vfs
+      - ${MEDIA_ROOT:?set MEDIA_ROOT in .env}:${MEDIA_ROOT}

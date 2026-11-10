@@ -1,8 +1,8 @@
 # Quarry v2 — Design
 
-Ground-up rebuild of the AI media downloader. The v1 postmortem lives in
-`../quarry-old/` (178 commits, 60% of fixes were band-aids). This doc is the
-contract for v2.
+Ground-up rebuild of the AI media downloader. Most of v1's fixes were
+band-aids over a pipeline that lost track of state; this doc is the contract
+for v2.
 
 ## Core principle
 
@@ -33,7 +33,7 @@ insert `torrents` row → add to qBittorrent (category `quarry`) → confirm via
 the 5.2 add-response. Monitoring is `torrents/info?hashes=`. File locations
 come from `torrents/files` + `content_path` (mapped `/downloads` →
 `DOWNLOADS_PATH`) — asked, never reconstructed from names. Blocklist is
-hash-keyed. qBittorrent is 5.2.3 (updated 2026-08-01).
+hash-keyed. Targets qBittorrent 5.2+.
 
 ### Seerr: poll, don't impersonate
 
@@ -56,8 +56,8 @@ reject-with-feedback.
 
 | Task | Model | Effort | Shape |
 |---|---|---|---|
-| `select` — pick releases for wanted items | `x-ai/grok-4.5` | high | bounded tool loop (search_prowlarr tool, max ~12 steps) → submits plan: `{candidateIndex, coversItems[]}` |
-| `map` — map torrent files to items | `x-ai/grok-4.5` | medium | one generateObject call: `{fileIndex → itemId | junk}` |
+| `select` — pick releases for wanted items | `openai/gpt-6-luna` | high | bounded tool loop (search_prowlarr tool, max ~12 steps) → submits plan: `{candidateIndex, coversItems[]}` |
+| `map` — map torrent files to items | `openai/gpt-6-luna` | medium | one generateObject call: `{fileIndex → itemId | junk}` |
 
 Rules learned from v1: LLMs select **by index**, never echo identifiers;
 **destination paths are built by code** from templates + item metadata
@@ -67,8 +67,8 @@ settings rows — swapping is a UI edit, not a deploy.
 
 ### Import
 
-Hardlink-first (verified working across `/mnt/nyxus-vfs/torrents` →
-`/mnt/nyxus-vfs/media`, same virtiofs filesystem), copy fallback (extracted
+Hardlink-first (downloads and library must be on the same filesystem),
+copy fallback (extracted
 archives). Atomic: write `.partial`, rename into place; exists = already done.
 ffprobe validates **before** the file lands in the library. Junk filtered by
 extension allowlist in code. Rate-limit metadata bursts (NAS safety: small

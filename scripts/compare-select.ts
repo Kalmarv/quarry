@@ -2,7 +2,7 @@
  * Side-by-side selection-model comparison on a real request.
  *
  *   bun --env-file=.env run scripts/compare-select.ts --request 23 \
- *     --models x-ai/grok-4.5,anthropic/claude-haiku-5.5 --runs 3 [--decision 753]
+ *     --models openai/gpt-6-luna,anthropic/claude-haiku-5.5 --runs 3 [--decision 753]
  *
  * Each model runs the production agent loop on the current prompt (live TMDB
  * facts) and, with --decision, on that decision's recorded prompt too. The
