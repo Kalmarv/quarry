@@ -130,3 +130,7 @@ against several models side by side. It only reads the live database.
 | `src/clients/` | Seerr, Prowlarr, qBittorrent, Jellyfin, Letterboxd |
 | `src/api/` | UI API and the Radarr/Sonarr stub |
 | `ui/` | React + Vite dashboard |
+
+## License
+
+[MIT](LICENSE)
