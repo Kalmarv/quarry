@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db, getSetting, logEvent, nextSelectAt, type ItemRow, type RequestRow } from "../db";
 import { modelFor, logDecision, openRouterCost } from "../llm";
 import * as prowlarr from "../clients/prowlarr";
+import * as seerr from "../clients/seerr";
 import { executePlan } from "./grab";
 
 export type PlanSelection = {
@@ -41,16 +42,103 @@ function itemLabel(i: ItemRow): string {
  */
 export type SelectOutcome = { kind: "plan"; planId: number } | { kind: "empty" } | { kind: "error" };
 
-/** Run the selection agent for one request. */
-export async function selectForRequest(req: RequestRow, wanted: ItemRow[]): Promise<SelectOutcome> {
-  const d = db();
+const today = () => new Date().toISOString().slice(0, 10);
 
-  const blocked = (
-    d.prepare("SELECT title FROM blocklist WHERE title IS NOT NULL ORDER BY ts DESC LIMIT 40").all() as {
-      title: string;
-    }[]
-  ).map((b) => b.title);
+/**
+ * TMDB facts that tell this title apart from same-named works (remakes,
+ * adaptations, knock-offs riding a big release). Release names only carry a
+ * title and year, so without these the agent can't spot an impostor.
+ */
+export function describeMovie(m: seerr.MovieDetails, now = today()): string[] {
+  const lines: string[] = [];
+  if (m.originalTitle) lines.push(`Original title: ${m.originalTitle}`);
+  if (m.directors.length) lines.push(`Directed by: ${m.directors.join(", ")}`);
+  if (m.cast.length) lines.push(`Starring: ${m.cast.join(", ")}`);
+  if (m.runtime) lines.push(`Runtime: ${m.runtime} min`);
+  if (m.releaseDate) lines.push(`Theatrical release: ${m.releaseDate}`);
+  const home = (label: string, date: string | null) =>
+    date ? `${label}: ${date}${date > now ? " (not yet — no genuine release of this kind exists)" : ""}` : `${label}: unknown`;
+  lines.push(home("Digital (WEB) release", m.digitalDate));
+  lines.push(home("Physical (Blu-ray) release", m.physicalDate));
+  return lines;
+}
 
+export function describeTv(t: seerr.TvDetails): string[] {
+  const lines: string[] = [];
+  if (t.originalName) lines.push(`Original title: ${t.originalName}`);
+  if (t.createdBy.length) lines.push(`Created by: ${t.createdBy.join(", ")}`);
+  if (t.networks.length) lines.push(`Network: ${t.networks.join(", ")}`);
+  if (t.firstAirDate) lines.push(`First aired: ${t.firstAirDate}`);
+  return lines;
+}
+
+async function titleFacts(req: RequestRow): Promise<string[]> {
+  return req.media_type === "movie"
+    ? describeMovie(await seerr.getMovie(req.tmdb_id))
+    : describeTv(await seerr.getTv(req.tmdb_id));
+}
+
+export function buildSelectPrompt(opts: {
+  req: RequestRow;
+  wanted: ItemRow[];
+  facts: string[];
+  qualityPolicy: string;
+  blocked: string[];
+  now?: string;
+}): string {
+  const { req, wanted, facts, blocked } = opts;
+  const label = `${req.title}${req.year ? ` (${req.year})` : ""}`;
+  return [
+    `Find torrents for: ${label} [${req.media_type}] (TMDB ${req.tmdb_id})`,
+    `Today is ${opts.now ?? today()}.`,
+    ``,
+    `About this title:`,
+    ...facts.map((f) => `  ${f}`),
+    ``,
+    `Items needed:`,
+    ...wanted.map((i) => `  ${itemLabel(i)}${i.air_date ? ` aired ${i.air_date}` : ""}`),
+    ``,
+    `Quality policy: ${opts.qualityPolicy}`,
+    req.feedback ? `\nUser feedback on previous attempts (OVERRIDES the policy): ${req.feedback}` : "",
+    blocked.length ? `\nPreviously failed releases — never select these:\n${blocked.map((b) => `  - ${b}`).join("\n")}` : "",
+    ``,
+    `Verify identity before quality. Other works often share this exact name and year — remakes, adaptations,`,
+    `low-budget knock-offs timed to a big release. Reject any candidate that contradicts the facts above:`,
+    `a WEB or Blu-ray source when the facts mark that release "not yet", a size implausible for the runtime,`,
+    `or a title that says it is a different work (and if one does, assume same-named siblings may be too).`,
+    `The year in a release name is the film's year, not when the file appeared; it often differs from TMDB's by one`,
+    `(festival premiere vs. wide release) — that alone is not a mismatch.`,
+    `If no candidate is clearly this title, submit an empty plan — waiting is always better than the wrong film.`,
+    ``,
+    `Select the smallest set of torrents that covers the needed items at appropriate quality.`,
+    `Prefer a season pack when it covers most of a season's needed episodes; use single episodes for stragglers.`,
+    `Judge quality from the release name (resolution, source, codec, group) and the policy above — you know what kind of title this is.`,
+    `Do not select redundant "backup" torrents. Map every selection to the item ids it covers.`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+export type AgentRun = {
+  plan: PlanPayload | null;
+  searches: { query: string; result: string }[];
+  costUsd: number | null;
+  error?: string;
+  durationMs: number;
+};
+
+/**
+ * The selection agent itself: a search/submit tool loop against Prowlarr.
+ * Side-effect free (beyond the searches), so model comparisons can run it.
+ */
+export async function runSelectionAgent(opts: {
+  prompt: string;
+  mediaType: "movie" | "tv";
+  wanted: ItemRow[];
+  modelId?: string;
+  search?: typeof prowlarr.search;
+}): Promise<AgentRun> {
+  const search = opts.search ?? prowlarr.search;
   // Candidates accumulate across searches; the LLM only ever sees indices.
   const candidates: prowlarr.Release[] = [];
   const seen = new Set<string>();
@@ -65,7 +153,7 @@ export async function selectForRequest(req: RequestRow, wanted: ItemRow[]): Prom
       "'Movie Name 2021' movies. Try a broad query first, then refine.",
     inputSchema: z.object({ query: z.string() }),
     execute: async ({ query }: { query: string }) => {
-      const results = await prowlarr.search(query, req.media_type);
+      const results = await search(query, opts.mediaType);
       const fresh = results
         .filter((r) => r.seeders > 0 && !seen.has(r.guid) && !isCamRip(r.title))
         .sort((a, b) => b.seeders - a.seeders)
@@ -103,7 +191,7 @@ export async function selectForRequest(req: RequestRow, wanted: ItemRow[]): Prom
       reasoning: z.string(),
     }),
     execute: async (plan) => {
-      const wantedIds = new Set(wanted.map((w) => w.id));
+      const wantedIds = new Set(opts.wanted.map((w) => w.id));
       const selections: PlanSelection[] = [];
       for (const s of plan.selections) {
         const c = candidates[s.candidateIndex];
@@ -127,26 +215,7 @@ export async function selectForRequest(req: RequestRow, wanted: ItemRow[]): Prom
     },
   });
 
-  const label = `${req.title}${req.year ? ` (${req.year})` : ""}`;
-  const prompt = [
-    `Find torrents for: ${label} [${req.media_type}] (TMDB ${req.tmdb_id})`,
-    ``,
-    `Items needed:`,
-    ...wanted.map((i) => `  ${itemLabel(i)}${i.air_date ? ` aired ${i.air_date}` : ""}`),
-    ``,
-    `Quality policy: ${getSetting("quality_policy")}`,
-    req.feedback ? `\nUser feedback on previous attempts (OVERRIDES the policy): ${req.feedback}` : "",
-    blocked.length ? `\nPreviously failed releases — never select these:\n${blocked.map((b) => `  - ${b}`).join("\n")}` : "",
-    ``,
-    `Select the smallest set of torrents that covers the needed items at appropriate quality.`,
-    `Prefer a season pack when it covers most of a season's needed episodes; use single episodes for stragglers.`,
-    `Judge quality from the release name (resolution, source, codec, group) and the policy above — you know what kind of title this is.`,
-    `Do not select redundant "backup" torrents. Map every selection to the item ids it covers.`,
-  ]
-    .filter(Boolean)
-    .join("\n");
-
-  const { model, modelId } = modelFor("select");
+  const { model } = modelFor("select", opts.modelId);
   const started = performance.now();
   let error: string | undefined;
   let costUsd: number | null = null;
@@ -155,27 +224,62 @@ export async function selectForRequest(req: RequestRow, wanted: ItemRow[]): Prom
       model,
       tools: { search: searchTool, submit_plan: submitTool },
       stopWhen: [stepCountIs(16), hasToolCall("submit_plan")],
-      prompt,
+      prompt: opts.prompt,
     });
     costUsd = openRouterCost(result.steps);
   } catch (e) {
     error = e instanceof Error ? e.message : String(e);
   }
+  return { plan: submitted, searches, costUsd, error, durationMs: performance.now() - started };
+}
+
+/** Run the selection agent for one request. */
+export async function selectForRequest(req: RequestRow, wanted: ItemRow[]): Promise<SelectOutcome> {
+  const d = db();
+
+  let facts: string[];
+  try {
+    facts = await titleFacts(req);
+  } catch (e) {
+    // Selecting blind is how impostors get grabbed; retry next interval.
+    logEvent({
+      level: "error",
+      message: `Selection skipped, title details unavailable: ${e instanceof Error ? e.message : String(e)}`,
+      requestId: req.id,
+    });
+    return { kind: "error" };
+  }
+
+  const blocked = (
+    d.prepare("SELECT title FROM blocklist WHERE title IS NOT NULL ORDER BY ts DESC LIMIT 40").all() as {
+      title: string;
+    }[]
+  ).map((b) => b.title);
+
+  const prompt = buildSelectPrompt({
+    req,
+    wanted,
+    facts,
+    qualityPolicy: getSetting("quality_policy"),
+    blocked,
+  });
+  const { modelId } = modelFor("select");
+  const run = await runSelectionAgent({ prompt, mediaType: req.media_type, wanted });
   logDecision({
     task: "select",
     model: modelId,
     input: { prompt, requestId: req.id },
-    output: { plan: submitted, searches },
-    error,
-    durationMs: performance.now() - started,
-    costUsd,
+    output: { plan: run.plan, searches: run.searches },
+    error: run.error,
+    durationMs: run.durationMs,
+    costUsd: run.costUsd,
   });
-  if (error) {
-    logEvent({ level: "error", message: `Selection failed: ${error}`, requestId: req.id });
+  if (run.error) {
+    logEvent({ level: "error", message: `Selection failed: ${run.error}`, requestId: req.id });
     return { kind: "error" };
   }
 
-  const plan = submitted as PlanPayload | null;
+  const plan = run.plan;
   if (!plan || plan.selections.length === 0) {
     logEvent({
       level: "warn",
@@ -185,6 +289,7 @@ export async function selectForRequest(req: RequestRow, wanted: ItemRow[]): Prom
     return { kind: "empty" };
   }
 
+  const label = `${req.title}${req.year ? ` (${req.year})` : ""}`;
   const res = d
     .prepare("INSERT INTO plans (request_id, payload) VALUES (?, ?)")
     .run(req.id, JSON.stringify(plan));

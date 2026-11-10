@@ -11,9 +11,12 @@ function provider() {
 
 export type LlmTask = "select" | "map";
 
-/** Model + reasoning effort come from settings so swaps are a UI edit. */
-export function modelFor(task: LlmTask) {
-  const model = getSetting(task === "select" ? "model_select" : "model_map");
+/**
+ * Model + reasoning effort come from settings so swaps are a UI edit.
+ * `override` swaps only the model, for side-by-side comparisons.
+ */
+export function modelFor(task: LlmTask, override?: string) {
+  const model = override ?? getSetting(task === "select" ? "model_select" : "model_map");
   const effort = getSetting(task === "select" ? "effort_select" : "effort_map");
   return {
     model: provider().chat(model, {
